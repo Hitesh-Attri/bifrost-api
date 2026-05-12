@@ -30,3 +30,9 @@ app.include_router(meta_router, prefix=API_V1_PREFIX)
 @app.get("/")
 async def root():
     return {"service": settings.app_name, "env": settings.app_env}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host=settings.host, port=settings.port, reload=settings.debug)
