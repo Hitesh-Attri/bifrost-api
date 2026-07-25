@@ -1,0 +1,122 @@
+name: Infra
+
+on:
+  push:
+    branches: [master]
+    paths: ["infra/**"]
+  pull_request:
+    branches: [master]
+    paths: ["infra/**"]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  TOFU_VERSION: "1.9.0"
+  TERRAGRUNT_VERSION: "0.77.0"
+  AWS_REGION: ap-south-1
+  TF_INPUT: false
+  NEXUS_INFRA_PATH: ${{ github.workspace }}/nexus-infra
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout bifrost-api
+        uses: actions/checkout@v4
+
+      - name: Checkout nexus-infra
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.NEXUS_INFRA_REPO }}
+          path: nexus-infra
+          token: ${{ secrets.NEXUS_INFRA_PAT }}
+
+      - name: Install OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: Install Terragrunt
+        run: |
+          curl -sL "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TERRAGRUNT_VERSION }}/terragrunt_linux_amd64" \
+            -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Plan
+        id: plan
+        working-directory: infra
+        run: |
+          terragrunt run-all plan \
+            --terragrunt-include-dir dev/ap-south-1 \
+            --terragrunt-non-interactive \
+            2>&1 | tee plan.out
+          echo "output<<EOF" >> $GITHUB_OUTPUT
+          head -c 60000 plan.out >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post plan to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `### bifrost-api Infra Plan
+            \`\`\`
+            ${{ steps.plan.outputs.output }}
+            \`\`\``;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+  apply:
+    name: Apply
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Checkout bifrost-api
+        uses: actions/checkout@v4
+
+      - name: Checkout nexus-infra
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.NEXUS_INFRA_REPO }}
+          path: nexus-infra
+          token: ${{ secrets.NEXUS_INFRA_PAT }}
+
+      - name: Install OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: Install Terragrunt
+        run: |
+          curl -sL "https://github.com/gruntwork-io/terragrunt/releases/download/v${{ env.TERRAGRUNT_VERSION }}/terragrunt_linux_amd64" \
+            -o /usr/local/bin/terragrunt
+          chmod +x /usr/local/bin/terragrunt
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Apply
+        working-directory: infra
+        run: |
+          terragrunt run-all apply \
+            --terragrunt-include-dir dev/ap-south-1 \
+            --terragrunt-non-interactive
